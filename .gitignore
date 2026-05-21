@@ -1,0 +1,62 @@
+# Smooth Loop Studio .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+app/temp/*
+!app/temp/.gitkeep
+app/logs/*
+!app/logs/.gitkeep
+app/exports/*
+!app/exports/.gitkeep
+app/ffmpeg/bin/
+app/ffmpeg/*.zip
+app/ffmpeg/*.tar.xz
+
+# AI models (large)
+app/ai/models/*.onnx
+app/ai/models/*.pt
+app/ai/models/*.pth
+app/ai/models/*.bin
+
+# User-provided assets (keep folder but ignore contents)
+app/music/*
+!app/music/.gitkeep
+app/overlays/*
+!app/overlays/.gitkeep
+
+# Cache
+*.cache
+.cache/
+.pytest_cache/
+
+# Logs
+*.log
+
+# Build artifacts
+build/
+dist/
+*.spec

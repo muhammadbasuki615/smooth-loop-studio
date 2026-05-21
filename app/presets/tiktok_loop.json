@@ -1,0 +1,24 @@
+{
+  "name": "TikTok Vertical Loop",
+  "description": "9:16 vertical with strong smoothing",
+  "loop_options": {
+    "mode": "crossfade",
+    "transition_seconds": 1.0,
+    "blend_intensity": 1.0,
+    "target_duration_seconds": 60,
+    "output_fps": 30,
+    "output_size": [1080, 1920]
+  },
+  "export_settings": {
+    "container": "mp4",
+    "codec": "h264",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "6M",
+    "audio_codec": "aac",
+    "audio_bitrate": "192k",
+    "use_gpu": true,
+    "preset": "veryfast"
+  }
+}

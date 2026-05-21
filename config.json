@@ -1,0 +1,75 @@
+{
+  "app": {
+    "name": "Smooth Loop Studio",
+    "version": "1.0.0",
+    "author": "Smooth Loop Studio",
+    "default_theme": "dark_glass"
+  },
+  "paths": {
+    "ffmpeg_bin": "app/ffmpeg/bin",
+    "temp": "app/temp",
+    "exports": "app/exports",
+    "logs": "app/logs",
+    "presets": "app/presets",
+    "overlays": "app/overlays",
+    "music": "app/music",
+    "plugins": "app/plugins",
+    "ai_models": "app/ai/models"
+  },
+  "engine": {
+    "default_loop_seconds": 3600,
+    "default_transition_seconds": 1.5,
+    "default_crossfade_audio_seconds": 1.0,
+    "default_fps": 30,
+    "default_resolution": [
+      1920,
+      1080
+    ],
+    "preview_resolution": [
+      854,
+      480
+    ],
+    "preview_fps": 24,
+    "cache_max_frames": 256,
+    "use_gpu": true,
+    "gpu_codec_preference": [
+      "nvenc",
+      "qsv",
+      "amf",
+      "cpu"
+    ],
+    "threads": 0
+  },
+  "export": {
+    "default_format": "mp4",
+    "default_codec": "h264",
+    "default_bitrate": "8M",
+    "smart_bitrate": true,
+    "audio_codec": "aac",
+    "audio_bitrate": "192k",
+    "two_pass": false
+  },
+  "ui": {
+    "window_size": [
+      1480,
+      900
+    ],
+    "accent_color": "#00E5FF",
+    "secondary_accent": "#FF4ECD",
+    "glass_blur": 18,
+    "show_fps_monitor": true,
+    "show_gpu_monitor": true
+  },
+  "ai": {
+    "interpolation_enabled": false,
+    "upscale_enabled": false,
+    "denoise_enabled": false,
+    "scene_detection_enabled": true,
+    "beat_sync_enabled": true
+  },
+  "logging": {
+    "level": "INFO",
+    "rotate_mb": 10,
+    "backup_count": 5
+  }
+}

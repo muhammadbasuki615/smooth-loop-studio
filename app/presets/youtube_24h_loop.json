@@ -1,0 +1,24 @@
+{
+  "name": "YouTube 24 Hour Loop",
+  "description": "Optimal preset for very long looping uploads on YouTube",
+  "loop_options": {
+    "mode": "crossfade",
+    "transition_seconds": 2.0,
+    "blend_intensity": 1.0,
+    "target_duration_seconds": 86400,
+    "output_fps": 30,
+    "output_size": [1920, 1080]
+  },
+  "export_settings": {
+    "container": "mp4",
+    "codec": "h264",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "bitrate": "6M",
+    "audio_codec": "aac",
+    "audio_bitrate": "192k",
+    "use_gpu": true,
+    "preset": "veryfast"
+  }
+}
