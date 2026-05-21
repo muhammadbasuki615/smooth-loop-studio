@@ -30,8 +30,12 @@ logger = get_logger(__name__)
 class RenderStatus(str, enum.Enum):
     PENDING = "pending"
     PREPARING = "preparing"
+    UNIT_BUILDING = "building loop unit"
+    LOOPING = "looping to target duration"
+    COMPOSING = "composing overlays/effects"
+    AUDIO = "mixing audio"
     RENDERING = "rendering"
-    MUXING = "muxing"
+    MUXING = "final muxing"
     DONE = "done"
     ERROR = "error"
     CANCELLED = "cancelled"
@@ -185,35 +189,66 @@ class ExportEngine:
     ) -> Path:
         s = job.export
         s.output_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Render job %s: src=%s target=%.1fs output=%s mode=%s",
+            job.job_id, job.source_video, job.target_duration, s.output_path, job.loop_options.mode
+        )
+
+        # Validate source
+        if not Path(job.source_video).exists():
+            raise FFmpegError(f"Source video not found: {job.source_video}")
+
+        def push(stage: RenderStatus, percent: float | None = None) -> None:
+            job.status = stage
+            if percent is not None:
+                job.progress = percent
+            logger.info("Job %s :: %s (%.1f%%)", job.job_id, stage.value, job.progress)
+            if on_progress:
+                on_progress(job)
 
         # 1. Build a seamless unit clip
-        job.status = RenderStatus.PREPARING
-        if on_progress:
-            on_progress(job)
+        push(RenderStatus.UNIT_BUILDING, 0.0)
         job.loop_options.output_size = (s.width, s.height)
         job.loop_options.output_fps = s.fps
         job.loop_options.target_duration_seconds = job.target_duration
         unit_path = self.loop_engine.build_seamless_unit(job.source_video, job.loop_options)
+        unit_dur = self.ffmpeg.duration_seconds(unit_path)
+        logger.info("Unit built: %s (%.2fs)", unit_path, unit_dur)
+        push(RenderStatus.UNIT_BUILDING, 10.0)
 
-        # 2. Loop unit to target duration (silent video baseline)
+        # 2. Loop unit to target duration (silent video baseline) - FAST, stream copy when possible
         looped_video = self.temp_dir / f"_looped_{job.job_id}.mp4"
+        push(RenderStatus.LOOPING, 10.0)
+
+        def loop_progress(elapsed: float, target: float) -> None:
+            if target > 0:
+                # Map looping progress to 10-50% of total
+                p = 10.0 + min(40.0, (elapsed / target) * 40.0)
+                job.progress = p
+                if on_progress:
+                    on_progress(job)
+
         self.loop_engine.build_long_loop(
-            unit_path, job.target_duration, looped_video, job.loop_options
+            unit_path, job.target_duration, looped_video, job.loop_options,
+            on_progress=loop_progress, cancel_event=cancel_event,
         )
+        push(RenderStatus.LOOPING, 50.0)
 
         # 3. Apply overlays + effects (single re-encode)
+        push(RenderStatus.COMPOSING, 50.0)
         composed_video = self.temp_dir / f"_composed_{job.job_id}.mp4"
         self._apply_overlays_and_effects(looped_video, composed_video, job, on_progress, cancel_event)
+        push(RenderStatus.COMPOSING, 70.0)
 
         # 4. Build audio (if any tracks)
         audio_path: Optional[Path] = None
         if job.audio_tracks:
+            push(RenderStatus.AUDIO, 70.0)
             audio_path = self._build_final_audio(job)
+            push(RenderStatus.AUDIO, 85.0)
 
         # 5. Mux audio + video into final output (re-encode to target codec/bitrate)
-        job.status = RenderStatus.MUXING
-        if on_progress:
-            on_progress(job)
+        push(RenderStatus.MUXING, 85.0)
         final_out = self._final_mux(composed_video, audio_path, job, on_progress, cancel_event)
 
         # 6. Cleanup intermediates
@@ -228,11 +263,9 @@ class ExportEngine:
             except Exception:
                 pass
 
-        job.status = RenderStatus.DONE
         job.progress = 100.0
         job.finished_at = time.time()
-        if on_progress:
-            on_progress(job)
+        push(RenderStatus.DONE, 100.0)
         return final_out
 
     # ------------------ stages ------------------
@@ -383,7 +416,7 @@ class ExportEngine:
         cancel_event: Optional[threading.Event],
         stage: str,
     ) -> None:
-        logger.debug("FFmpeg [%s] %s", stage, " ".join(cmd))
+        logger.info("FFmpeg [%s] %s", stage, " ".join(str(c) for c in cmd))
         job.status = RenderStatus.RENDERING
         if on_progress:
             on_progress(job)
@@ -392,8 +425,14 @@ class ExportEngine:
         )
         assert proc.stdout is not None
         start = time.time()
+        tail: list[str] = []
         try:
             for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    tail.append(line)
+                    if len(tail) > 80:
+                        tail.pop(0)
                 if cancel_event is not None and cancel_event.is_set():
                     proc.terminate()
                     job.status = RenderStatus.CANCELLED
@@ -405,8 +444,10 @@ class ExportEngine:
                     hh, mm, ss = m.groups()
                     elapsed = int(hh) * 3600 + int(mm) * 60 + float(ss)
                     if job.target_duration > 0:
-                        progress = min(99.0, elapsed * 100.0 / job.target_duration)
-                        job.progress = progress
+                        # Map this stage's progress to its overall band (e.g., MUXING = 85-100%)
+                        band_lo, band_hi = self._stage_band(stage)
+                        sub_progress = min(1.0, elapsed / job.target_duration)
+                        job.progress = band_lo + (band_hi - band_lo) * sub_progress
                         # Rough ETA
                         wall = time.time() - start
                         rate = elapsed / max(0.01, wall)
@@ -419,7 +460,20 @@ class ExportEngine:
             if proc.poll() is None:
                 proc.kill()
         if proc.returncode != 0:
-            raise FFmpegError(f"FFmpeg stage '{stage}' failed (exit {proc.returncode})")
+            tail_text = "\n".join(tail[-30:])
+            logger.error("FFmpeg [%s] failed (exit %d). Tail:\n%s", stage, proc.returncode, tail_text)
+            raise FFmpegError(
+                f"FFmpeg stage '{stage}' failed (exit {proc.returncode}).\n"
+                f"Last output:\n{tail_text}"
+            )
+
+    @staticmethod
+    def _stage_band(stage: str) -> tuple[float, float]:
+        return {
+            "composing": (50.0, 70.0),
+            "muxing": (85.0, 100.0),
+            "encoding": (85.0, 100.0),
+        }.get(stage, (0.0, 100.0))
 
 
 class RenderQueue:

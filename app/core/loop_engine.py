@@ -20,10 +20,14 @@ from __future__ import annotations
 
 import enum
 import math
+import re
 import shutil
+import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from .ffmpeg_utils import FFmpeg, FFmpegError, build_filter_chain
 from .logger import get_logger
@@ -326,17 +330,25 @@ class LoopEngine:
 
     # ---------------- long-form loop builder ----------------
 
+    _PROGRESS_RE = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+
     def build_long_loop(
         self,
         unit_path: str | Path,
         target_duration_seconds: float,
         output_path: str | Path,
         loop_options: LoopOptions | None = None,
+        on_progress: Optional[Callable[[float, float], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> LoopResult:
         """Loop the unit clip with ``-stream_loop`` to fill the target duration.
 
-        This does NOT re-encode the unit; it uses concat demuxer / stream_loop
-        for max efficiency. For hours-long output this is essential.
+        Uses ``-c copy`` for instant looping without re-encoding. If the unit
+        clip's codec/timing can't be safely concatenated with copy (rare), the
+        caller can fall back via try/except - we attempt copy first.
+
+        ``on_progress`` is called with ``(elapsed_seconds, target_duration)``
+        as FFmpeg processes each chunk so the UI can show real progress.
         """
         unit_path = Path(unit_path)
         if not unit_path.exists():
@@ -347,19 +359,42 @@ class LoopEngine:
         unit_dur = self.ffmpeg.duration_seconds(unit_path)
         iters = self.compute_iterations(unit_dur, target_duration_seconds)
 
-        # Use -stream_loop for efficient looping (re-encode to ensure timestamps).
-        cmd: list[str] = [
-            self.ffmpeg.binary, "-y",
+        # PRIMARY: instant loop via stream copy (no re-encode, completes in
+        # seconds for hours-long output). This works because the unit clip is
+        # already encoded at the target codec/size/fps inside build_seamless_unit.
+        copy_cmd: list[str] = [
+            self.ffmpeg.binary, "-y", "-hide_banner", "-loglevel", "error",
             "-stream_loop", str(iters - 1),
             "-i", str(unit_path),
             "-t", f"{target_duration_seconds:.3f}",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-pix_fmt", "yuv420p",
+            "-c", "copy",
             "-movflags", "+faststart",
             "-an",
             str(out),
         ]
-        self.ffmpeg.run(cmd, capture=True)
+        try:
+            self._run_streaming(
+                copy_cmd, target_duration_seconds,
+                on_progress=on_progress, cancel_event=cancel_event,
+            )
+        except FFmpegError as e:
+            logger.warning("Stream copy loop failed (%s); falling back to re-encode.", e)
+            # FALLBACK: re-encode with fast preset.
+            enc_cmd: list[str] = [
+                self.ffmpeg.binary, "-y", "-hide_banner",
+                "-stream_loop", str(iters - 1),
+                "-i", str(unit_path),
+                "-t", f"{target_duration_seconds:.3f}",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-an",
+                str(out),
+            ]
+            self._run_streaming(
+                enc_cmd, target_duration_seconds,
+                on_progress=on_progress, cancel_event=cancel_event,
+            )
 
         return LoopResult(
             output_path=out,
@@ -367,6 +402,48 @@ class LoopEngine:
             unit_duration=unit_dur,
             iterations=iters,
         )
+
+    def _run_streaming(
+        self,
+        cmd: list[str],
+        target_duration: float,
+        on_progress: Optional[Callable[[float, float], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Run ffmpeg streaming stdout, calling on_progress on each progress line."""
+        logger.info("LoopEngine FFmpeg: %s", " ".join(str(c) for c in cmd))
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        assert proc.stdout is not None
+        tail: list[str] = []
+        try:
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    tail.append(line)
+                    if len(tail) > 60:
+                        tail.pop(0)
+                if cancel_event is not None and cancel_event.is_set():
+                    proc.terminate()
+                    raise FFmpegError("Loop cancelled by user")
+                m = self._PROGRESS_RE.search(line)
+                if m and on_progress is not None:
+                    hh, mm, ss = m.groups()
+                    elapsed = int(hh) * 3600 + int(mm) * 60 + float(ss)
+                    try:
+                        on_progress(elapsed, target_duration)
+                    except Exception:
+                        pass
+            proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        if proc.returncode != 0:
+            tail_text = "\n".join(tail[-20:])
+            raise FFmpegError(
+                f"FFmpeg loop step failed (exit {proc.returncode}).\nLast output:\n{tail_text}"
+            )
 
     def cleanup_temp(self, keep: Sequence[Path] = ()) -> None:
         keep_set = {Path(p).resolve() for p in keep}

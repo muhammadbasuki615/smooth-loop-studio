@@ -260,8 +260,20 @@ class MainWindow(QMainWindow):
 
     def _refresh_render_panels(self, job: RenderJob) -> None:
         self.render_queue_panel.on_job_update(job)
-        self.export_panel.set_progress(job.progress, f"{job.status.value}  {job.progress:.1f}%")
-        self.dashboard.set_render_progress(job.progress, f"{job.status.value}  {job.progress:.1f}%")
+        label = f"{job.status.value}  {job.progress:.1f}%"
+        if job.eta_seconds and job.status.value not in ("done", "error", "cancelled", "pending"):
+            eta_min = int(job.eta_seconds // 60)
+            eta_sec = int(job.eta_seconds % 60)
+            label += f"  ETA {eta_min}:{eta_sec:02d}"
+        self.export_panel.set_progress(job.progress, label)
+        self.dashboard.set_render_progress(job.progress, label)
+        # Pop a one-shot error dialog when a job fails.
+        if job.status.value == "error" and getattr(self, "_last_error_job", None) != job.job_id:
+            self._last_error_job = job.job_id
+            QMessageBox.critical(
+                self, "Render gagal",
+                f"Job {job.job_id} gagal.\n\n{job.error_message[:1200]}",
+            )
 
     # ---------------- misc ----------------
 

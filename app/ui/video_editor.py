@@ -77,15 +77,17 @@ class VideoEditorPanel(QWidget):
         self.sp_motion.setSingleStep(0.1)
         self.sp_motion.setValue(1.0)
 
+        # Target duration is in MINUTES (easier than seconds)
+        # 1 = 1 minute, 60 = 1 hour, 1440 = 24 hours
         self.sp_target = QSpinBox()
-        self.sp_target.setRange(1, 24 * 3600)
-        self.sp_target.setValue(3600)
-        self.sp_target.setSuffix(" s")
+        self.sp_target.setRange(1, 24 * 60)  # 1 min to 24 hours
+        self.sp_target.setValue(60)            # default 60 min = 1 hour
+        self.sp_target.setSuffix(" menit")
 
         self.cb_duration_preset = QComboBox()
         self.cb_duration_preset.addItems([
-            "Custom", "1 minute", "10 minutes", "30 minutes",
-            "1 hour", "5 hours", "10 hours", "24 hours",
+            "Custom", "1 menit", "10 menit", "30 menit",
+            "1 jam", "5 jam", "10 jam", "24 jam",
         ])
         self.cb_duration_preset.currentTextChanged.connect(self._apply_duration_preset)
 
@@ -149,14 +151,15 @@ class VideoEditorPanel(QWidget):
             self.preview.load(path)
 
     def _apply_duration_preset(self, text: str) -> None:
+        # Values are in MINUTES
         m = {
-            "1 minute": 60,
-            "10 minutes": 600,
-            "30 minutes": 1800,
-            "1 hour": 3600,
-            "5 hours": 5 * 3600,
-            "10 hours": 10 * 3600,
-            "24 hours": 24 * 3600,
+            "1 menit": 1,
+            "10 menit": 10,
+            "30 menit": 30,
+            "1 jam": 60,
+            "5 jam": 5 * 60,
+            "10 jam": 10 * 60,
+            "24 jam": 24 * 60,
         }
         if text in m:
             self.sp_target.setValue(m[text])
@@ -170,7 +173,7 @@ class VideoEditorPanel(QWidget):
             transition_seconds=float(self.sp_transition.value()),
             blend_intensity=float(self.sp_blend.value()),
             motion_strength=float(self.sp_motion.value()),
-            target_duration_seconds=float(self.sp_target.value()),
+            target_duration_seconds=float(self.sp_target.value()) * 60.0,  # minutes -> seconds
             output_fps=int(self.sp_fps.value()),
             output_size=(int(self.sp_width.value()), int(self.sp_height.value())),
         )
